@@ -1,0 +1,156 @@
+name: Build anime
+
+# Compile l'app Nartya Anime — code source dans le repo PRIVÉ `NartyaTeam/nartya`, checkout
+# ici via un PAT dédié (secret `APP_CHECKOUT_TOKEN`, lecture seule, restreint à ce repo).
+#
+# Ce repo (`nartya-builds`) est PUBLIC : minutes Actions illimitées. Seul le workflow YAML et
+# les binaires compilés sont publics — jamais le code source.
+#
+# Déclenchement 100% MANUEL, jamais sur `pull_request` (cf. README § sécurité — un fork
+# externe pourrait sinon exécuter ce workflow et exfiltrer les secrets).
+#
+# Ce workflow NE PUBLIE RIEN sur nartya.app — cf. publish-anime.yml, déclenché séparément.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag ou branche de NartyaTeam/nartya à compiler (ex. v1.20.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout du code source privé (NartyaTeam/nartya)
+        uses: actions/checkout@v4
+        with:
+          repository: NartyaTeam/nartya
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build front (Vite)
+        run: npm run build
+        env:
+          # anon key publique par design (protégée par RLS Supabase).
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_DISCORD_RPC_CLIENT_ID: "1170085087564541953"
+
+      - name: Build Electron (sans publication)
+        run: npx --no-install electron-builder --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Vérifie la présence des métadonnées updater (latest*.yml)
+        shell: bash
+        run: |
+          if ! ls release/latest*.yml >/dev/null 2>&1; then
+            echo "❌ Aucun latest*.yml généré — l'updater standalone serait cassé."
+            echo "   (Vérifier build.publish=generic dans package.json.)"
+            exit 1
+          fi
+          ls -lh release/
+
+      - name: Vérifie que latest-mac.yml couvre les deux architectures
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for f in release/latest-mac*.yml; do echo "── $f ──"; cat "$f"; done
+          agrege=$(cat release/latest-mac*.yml)
+          for a in x64 arm64; do
+            printf '%s' "$agrege" | grep -q -- "-mac-${a}\." || {
+              echo "❌ Aucun artefact ${a} référencé dans les latest-mac*.yml."
+              exit 1
+            }
+          done
+          echo "✅ x64 et arm64 sont tous deux référencés."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+            release/*.blockmap
+            release/latest*.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code source privé (pour scripts/gen-release-manifest.mjs)
+        uses: actions/checkout@v4
+        with:
+          repository: NartyaTeam/nartya
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rassemble les artefacts dans upload/
+        run: |
+          mkdir -p upload
+          find artifacts -type f -exec cp -n {} upload/ \;
+          ls -lh upload
+
+      - name: Génère manifest.json + SHA256SUMS.txt
+        run: |
+          VERSION="${{ inputs.ref }}"
+          VERSION="${VERSION#v}"
+          node scripts/gen-release-manifest.mjs upload --version "$VERSION"
+          ( cd upload && sha256sum Nartya-* > SHA256SUMS.txt )
+          echo "── manifest.json ──"; cat upload/manifest.json
+          echo "── SHA256SUMS.txt ──"; cat upload/SHA256SUMS.txt
+
+      - name: Scan des installeurs sur VirusTotal
+        uses: crazy-max/ghaction-virustotal@v4
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          files: |
+            upload/Nartya-*.exe
+            upload/Nartya-*.dmg
+            upload/Nartya-*.AppImage
+            upload/Nartya-*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-final
+          path: upload/**
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Résumé — prochaine étape
+        run: |
+          echo "✅ Build + vérification terminés pour ${{ inputs.ref }}."
+          echo ""
+          echo "Run ID de CE run : ${GITHUB_RUN_ID}"
+          echo ""
+          echo "Pour publier sur le VPS : Actions → 'Publish anime (manual)' → Run workflow"
+          echo "→ colle ce run_id : ${GITHUB_RUN_ID}"

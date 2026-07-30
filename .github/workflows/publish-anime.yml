@@ -1,0 +1,113 @@
+name: Publish anime (manual)
+
+# Déclenchement 100% MANUEL — porte d'approbation pour la mise en ligne sur le feed
+# auto-hébergé https://nartya.app/dl/anime/. Aucun push ne lance ce workflow.
+#
+# Marche à suivre :
+#   1. Actions → "Build anime" → Run workflow → indiquer le tag/branche à compiler.
+#   2. Vérifier ce run (logs de build, liens VirusTotal) une fois terminé.
+#   3. Si tout est bon : Actions → "Publish anime (manual)" → Run workflow → coller le run_id
+#      affiché à la fin du job `verify` de l'étape 1.
+#   4. Ce workflow reprend TEL QUEL l'artefact `dist-final` de ce run précis (aucun rebuild)
+#      et l'envoie sur le VPS.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID du workflow 'Build anime' à publier (affiché dans son dernier step)"
+        required: true
+        type: string
+      mirror_nartya_app:
+        description: "Publier aussi sur le miroir public nartya-app (transition des installs ≤ 1.16.1)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupère les artefacts déjà build + vérifiés (aucun rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-final
+          path: upload
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Vérifie que la version du manifest correspond à l'attendu
+        run: |
+          echo "Contenu à publier :"
+          ls -lh upload
+          echo ""
+          echo "Version dans manifest.json :"
+          node -e "console.log(require('./upload/manifest.json').version)" 2>/dev/null \
+            || (grep -m1 '"version"' upload/manifest.json)
+
+      - name: Upload des binaires vers le VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/Nartya-*,upload/*.blockmap"
+          target: "/var/www/nartya/dl/anime/"
+          strip_components: 1
+
+      - name: Upload des métadonnées (bascule atomique)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/latest*.yml,upload/manifest.json,upload/SHA256SUMS.txt"
+          target: "/var/www/nartya/dl/anime/"
+          strip_components: 1
+
+      # Miroir public GitHub — UNIQUEMENT pour les installs figées sur l'ancien updater
+      # (≤ 1.16.1, `app-update.yml` gravé sur NartyaTeam/nartya-app). Étape temporaire.
+      - name: Miroir vers nartya-app (anciennes installs)
+        if: ${{ inputs.mirror_nartya_app }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./upload/manifest.json').version")
+          TAG="v${VERSION}"
+          REPO=NartyaTeam/nartya-app
+
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG déjà présente — ré-upload des assets (--clobber)."
+          else
+            printf '%s\n' \
+              "Mise à jour ${VERSION}." \
+              "" \
+              "Les prochaines mises à jour se feront automatiquement depuis nartya.app." > notes.md
+            gh release create "$TAG" --repo "$REPO" --draft --title "$VERSION" --notes-file notes.md
+          fi
+
+          shopt -s nullglob
+          assets=(upload/latest*.yml upload/Nartya-* upload/*.blockmap)
+          [ ${#assets[@]} -gt 0 ] || { echo "❌ Aucun asset à publier."; exit 1; }
+
+          mapfile -t assets < <(printf '%s\n' "${assets[@]}" | sort -u)
+          echo "Assets à publier (${#assets[@]}) :"; printf '  %s\n' "${assets[@]}"
+
+          gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+
+      - name: Résumé
+        run: |
+          echo "✅ Publié sur https://nartya.app/dl/anime/"
+          echo "Vérifie : curl -s https://nartya.app/dl/anime/manifest.json"
+          if [ "${{ inputs.mirror_nartya_app }}" = "true" ]; then
+            echo "✅ Miroir nartya-app mis à jour (transition des anciennes installs)."
+          else
+            echo "⏭️  Miroir nartya-app ignoré."
+          fi

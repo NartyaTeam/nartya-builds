@@ -17,11 +17,6 @@ on:
         description: "Run ID du workflow 'Build anime' à publier (affiché dans son dernier step)"
         required: true
         type: string
-      mirror_nartya_app:
-        description: "Publier aussi sur le miroir public nartya-app (transition des installs ≤ 1.16.1)"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: read
@@ -70,44 +65,12 @@ jobs:
           target: "/var/www/nartya/dl/anime/"
           strip_components: 1
 
-      # Miroir public GitHub — UNIQUEMENT pour les installs figées sur l'ancien updater
-      # (≤ 1.16.1, `app-update.yml` gravé sur NartyaTeam/nartya-app). Étape temporaire.
-      - name: Miroir vers nartya-app (anciennes installs)
-        if: ${{ inputs.mirror_nartya_app }}
-        env:
-          GH_TOKEN: ${{ secrets.GH_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./upload/manifest.json').version")
-          TAG="v${VERSION}"
-          REPO=NartyaTeam/nartya-app
-
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release $TAG déjà présente — ré-upload des assets (--clobber)."
-          else
-            printf '%s\n' \
-              "Mise à jour ${VERSION}." \
-              "" \
-              "Les prochaines mises à jour se feront automatiquement depuis nartya.app." > notes.md
-            gh release create "$TAG" --repo "$REPO" --draft --title "$VERSION" --notes-file notes.md
-          fi
-
-          shopt -s nullglob
-          assets=(upload/latest*.yml upload/Nartya-* upload/*.blockmap)
-          [ ${#assets[@]} -gt 0 ] || { echo "❌ Aucun asset à publier."; exit 1; }
-
-          mapfile -t assets < <(printf '%s\n' "${assets[@]}" | sort -u)
-          echo "Assets à publier (${#assets[@]}) :"; printf '  %s\n' "${assets[@]}"
-
-          gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
-          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+      # Le miroir GitHub `nartya-app` (installs ≤ 1.16.1) n'est plus republié depuis le
+      # 2026-07-30 — décision explicite : la migration vers le hub/VPS est jugée suffisamment
+      # avancée. Le repo reste en ligne (dernière version publiée y répond encore), il n'est
+      # juste plus mis à jour. Pas besoin de GH_PUBLISH_TOKEN ici.
 
       - name: Résumé
         run: |
           echo "✅ Publié sur https://nartya.app/dl/anime/"
           echo "Vérifie : curl -s https://nartya.app/dl/anime/manifest.json"
-          if [ "${{ inputs.mirror_nartya_app }}" = "true" ]; then
-            echo "✅ Miroir nartya-app mis à jour (transition des anciennes installs)."
-          else
-            echo "⏭️  Miroir nartya-app ignoré."
-          fi

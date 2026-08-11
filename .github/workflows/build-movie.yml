@@ -54,6 +54,9 @@ jobs:
           # URL publique de l'API films (pas un secret — juste l'endpoint prod).
           VITE_MOVIE_API_URL: "https://movie.nartya.app"
 
+      - name: Build Electron main process (electron-dist/)
+        run: npm run build:electron
+
       - name: Build Electron (sans publication)
         run: npx --no-install electron-builder --publish never
         env:

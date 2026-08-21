@@ -1,0 +1,191 @@
+name: Build Android
+
+# Build et signe uniquement l'APK Android. Le tag `android-vX.Y.Z` et
+# `android/version.json` forment un cycle de release indépendant du desktop.
+# Déclenchement manuel uniquement : jamais de code de fork avec les secrets de signature.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag Android NartyaTeam/nartya à compiler (ex. android-v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    environment: android-signing
+    env:
+      RELEASE_REF: ${{ inputs.ref }}
+      EXPECTED_ANDROID_CERT_SHA256: eab57f31e33f4b2c4ccf437502a33b6d35a3bae1fc6f6630d6e9c038523d665c
+    steps:
+      - name: Refuse toute ref autre qu'un tag Android stable
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_REF" =~ ^android-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ La signature exige un tag android-vX.Y.Z, reçu : $RELEASE_REF"
+            exit 1
+          fi
+
+      - name: Checkout du tag privé à signer
+        uses: actions/checkout@v4
+        with:
+          repository: NartyaTeam/nartya
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vérifie la cohérence du tag et de la version Android
+        shell: bash
+        run: |
+          git show-ref --verify --quiet "refs/tags/$RELEASE_REF" || {
+            echo "❌ $RELEASE_REF n'est pas un tag du dépôt source"
+            exit 1
+          }
+          [ "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_REF^{commit}")" ] || {
+            echo "❌ Le checkout ne correspond pas au commit du tag $RELEASE_REF"
+            exit 1
+          }
+          node <<'NODE'
+          const refVersion = process.env.RELEASE_REF.replace(/^android-v/, "");
+          const { versionName, versionCode } = require("./android/version.json");
+          if (
+            versionName !== refVersion ||
+            !/^\d+\.\d+\.\d+$/.test(versionName) ||
+            !Number.isSafeInteger(versionCode) ||
+            versionCode < 12800 ||
+            versionCode > 2100000000
+          ) {
+            console.error({ refVersion, versionName, versionCode });
+            process.exit(1);
+          }
+          console.log(`✅ Android ${versionName} (code ${versionCode})`);
+          NODE
+
+      - name: Reconstruit le keystore éphémère
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          : "${ANDROID_KEYSTORE_BASE64:?secret ANDROID_KEYSTORE_BASE64 absent}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?secret ANDROID_KEYSTORE_PASSWORD absent}"
+          : "${ANDROID_KEY_ALIAS:?secret ANDROID_KEY_ALIAS absent}"
+          : "${ANDROID_KEY_PASSWORD:?secret ANDROID_KEY_PASSWORD absent}"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/nartya-release.jks"
+          chmod 600 "$RUNNER_TEMP/nartya-release.jks"
+          {
+            printf 'storeFile=%s\n' "$RUNNER_TEMP/nartya-release.jks"
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+          } > android/keystore.properties
+          chmod 600 android/keystore.properties
+
+      - name: Tests et build APK release signé
+        run: |
+          npm run test:unit
+          npm run android:release
+          npm run test:android
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Vérifie package, version et certificat puis prépare l'artefact
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p 'require("./android/version.json").versionName')
+          VERSION_CODE=$(node -p 'require("./android/version.json").versionCode')
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          APKSIGNER="$BUILD_TOOLS/apksigner"
+          AAPT="$BUILD_TOOLS/aapt"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          CERT_SHA=$("$APKSIGNER" verify --print-certs "$APK" \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -n1 | tr '[:upper:]' '[:lower:]')
+          [ "$CERT_SHA" = "$EXPECTED_ANDROID_CERT_SHA256" ] || {
+            echo "❌ Certificat Android inattendu : $CERT_SHA"
+            exit 1
+          }
+
+          BADGING=$("$AAPT" dump badging "$APK" | head -n1)
+          printf '%s\n' "$BADGING"
+          printf '%s' "$BADGING" | grep -F "package: name='com.nartya.app' versionCode='$VERSION_CODE' versionName='$VERSION'"
+
+          mkdir -p android-release
+          TARGET="android-release/Nartya-${VERSION}-android.apk"
+          cp "$APK" "$TARGET"
+          node scripts/gen-android-release-manifest.mjs "$TARGET" \
+            --version "$VERSION" \
+            --base-url "https://nartya.app/dl/android/" \
+            --out android-release/android-release.json
+          (cd android-release && sha256sum "Nartya-${VERSION}-android.apk" > android-SHA256SUMS.txt)
+          ls -lh android-release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-android
+          path: android-release/**
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-android
+          path: upload
+
+      - name: Vérifie les empreintes Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upload
+          sha256sum --check android-SHA256SUMS.txt
+          test -s android-release.json
+
+      - name: Scan de l'APK sur VirusTotal
+        uses: crazy-max/ghaction-virustotal@v4
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          files: upload/Nartya-*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-android
+          path: upload/**
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Résumé — prochaine étape
+        run: |
+          echo "✅ Build Android terminé pour ${{ inputs.ref }}."
+          echo "Run ID : ${GITHUB_RUN_ID}"
+          echo "Publication : Actions → Publish Android (manual) → ${GITHUB_RUN_ID}"

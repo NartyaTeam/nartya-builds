@@ -1,20 +1,12 @@
 name: Publish anime (manual)
 
-# Déclenchement 100% MANUEL — porte d'approbation pour la mise en ligne sur le feed
-# auto-hébergé https://nartya.app/dl/anime/. Aucun push ne lance ce workflow.
-#
-# Marche à suivre :
-#   1. Actions → "Build anime" → Run workflow → indiquer le tag/branche à compiler.
-#   2. Vérifier ce run (logs de build, liens VirusTotal) une fois terminé.
-#   3. Si tout est bon : Actions → "Publish anime (manual)" → Run workflow → coller le run_id
-#      affiché à la fin du job `verify` de l'étape 1.
-#   4. Ce workflow reprend TEL QUEL l'artefact `dist-final` de ce run précis (aucun rebuild)
-#      et l'envoie sur le VPS.
+# Porte d'approbation desktop. Reprend sans rebuild l'artefact `dist-final` d'un run précis
+# de Build anime et le publie sur le feed auto-hébergé.
 on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Run ID du workflow 'Build anime' à publier (affiché dans son dernier step)"
+        description: "Run ID du workflow 'Build anime' à publier"
         required: true
         type: string
 
@@ -26,7 +18,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Récupère les artefacts déjà build + vérifiés (aucun rebuild)
+      - name: Récupère les artefacts desktop vérifiés (aucun rebuild)
         uses: actions/download-artifact@v4
         with:
           name: dist-final
@@ -34,27 +26,26 @@ jobs:
           run-id: ${{ inputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Vérifie que la version du manifest correspond à l'attendu
+      - name: Vérifie le manifeste desktop
         run: |
-          echo "Contenu à publier :"
+          set -euo pipefail
           ls -lh upload
-          echo ""
-          echo "Version dans manifest.json :"
-          node -e "console.log(require('./upload/manifest.json').version)" 2>/dev/null \
-            || (grep -m1 '"version"' upload/manifest.json)
+          test -s upload/manifest.json
+          test -s upload/SHA256SUMS.txt
+          node -e "console.log(require('./upload/manifest.json').version)"
 
-      - name: Upload des binaires vers le VPS
+      - name: Upload des binaires desktop vers le VPS
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          source: "upload/Nartya-*,upload/*.blockmap"
+          source: "upload/Nartya-*.exe,upload/Nartya-*.dmg,upload/Nartya-*.zip,upload/Nartya-*.AppImage,upload/Nartya-*.deb,upload/*.blockmap"
           target: "/var/www/nartya/dl/anime/"
           strip_components: 1
 
-      - name: Upload des métadonnées (bascule atomique)
+      - name: Upload des métadonnées desktop
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -65,12 +56,8 @@ jobs:
           target: "/var/www/nartya/dl/anime/"
           strip_components: 1
 
-      # Le miroir GitHub `nartya-app` (installs ≤ 1.16.1) n'est plus republié depuis le
-      # 2026-07-30 — décision explicite : la migration vers le hub/VPS est jugée suffisamment
-      # avancée. Le repo reste en ligne (dernière version publiée y répond encore), il n'est
-      # juste plus mis à jour. Pas besoin de GH_PUBLISH_TOKEN ici.
-
+      # Le miroir `nartya-app` reste gelé depuis le 2026-07-30.
       - name: Résumé
         run: |
-          echo "✅ Publié sur https://nartya.app/dl/anime/"
+          echo "✅ Desktop publié sur https://nartya.app/dl/anime/"
           echo "Vérifie : curl -s https://nartya.app/dl/anime/manifest.json"

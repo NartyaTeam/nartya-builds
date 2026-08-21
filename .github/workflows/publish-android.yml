@@ -1,0 +1,162 @@
+name: Publish Android (manual)
+
+# Porte d'approbation Android. Reprend l'artefact `dist-android` déjà signé, vérifié et
+# scanné, publie d'abord l'APK puis bascule le manifeste consommé par l'API.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID du workflow 'Build Android' à publier"
+        required: true
+        type: string
+      mandatory:
+        description: "Rendre cette mise à jour Android obligatoire immédiatement"
+        required: true
+        default: false
+        type: boolean
+      message:
+        description: "Message affiché avec la mise à jour (facultatif)"
+        required: false
+        default: ""
+        type: string
+      min_supported_override:
+        description: "Plancher explicite (migration/rollback uniquement, sinon vide)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_ANDROID_CERT_SHA256: eab57f31e33f4b2c4ccf437502a33b6d35a3bae1fc6f6630d6e9c038523d665c
+    steps:
+      - name: Récupère l'APK déjà vérifiée (aucun rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-android
+          path: upload
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Vérifie l'APK et prépare la politique Android
+        shell: bash
+        env:
+          ANDROID_MANDATORY: ${{ inputs.mandatory }}
+          ANDROID_MESSAGE: ${{ inputs.message }}
+          ANDROID_MIN_OVERRIDE: ${{ inputs.min_supported_override }}
+        run: |
+          set -euo pipefail
+          [ ${#ANDROID_MESSAGE} -le 280 ] || {
+            echo "❌ Le message Android dépasse 280 caractères"
+            exit 1
+          }
+          test -s upload/android-release.json
+          APK=$(find upload -maxdepth 1 -type f -name 'Nartya-*-android.apk' -print -quit)
+          test -n "$APK"
+
+          EXPECTED_SHA=$(jq -er '.sha256 | select(test("^[a-f0-9]{64}$"))' upload/android-release.json)
+          ACTUAL_SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          [ "$EXPECTED_SHA" = "$ACTUAL_SHA" ] || {
+            echo "❌ SHA-256 Android incohérent"
+            exit 1
+          }
+
+          VERSION=$(jq -er '.latest | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' upload/android-release.json)
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          APKSIGNER="$BUILD_TOOLS/apksigner"
+          AAPT="$BUILD_TOOLS/aapt"
+          "$APKSIGNER" verify --verbose "$APK"
+          CERT_SHA=$("$APKSIGNER" verify --print-certs "$APK" \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -n1 | tr '[:upper:]' '[:lower:]')
+          [ "$CERT_SHA" = "$EXPECTED_ANDROID_CERT_SHA256" ] || {
+            echo "❌ Certificat Android inattendu : $CERT_SHA"
+            exit 1
+          }
+          BADGING=$("$AAPT" dump badging "$APK" | head -n1)
+          printf '%s' "$BADGING" | grep -F "package: name='com.nartya.app'" | grep -F "versionName='$VERSION'"
+
+          CURRENT_MIN=0.0.0
+          if curl -fsS https://nartya.app/dl/android/latest.json -o current-android.json; then
+            CANDIDATE=$(jq -r '.minSupported // "0.0.0"' current-android.json)
+            if [[ "$CANDIDATE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then CURRENT_MIN="$CANDIDATE"; fi
+          fi
+
+          if [ -n "$ANDROID_MIN_OVERRIDE" ] && [ "$ANDROID_MANDATORY" = "true" ]; then
+            echo "❌ Choisir mandatory OU min_supported_override, pas les deux"
+            exit 1
+          fi
+          if [ -n "$ANDROID_MIN_OVERRIDE" ]; then
+            [[ "$ANDROID_MIN_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "❌ Plancher Android explicite invalide"
+              exit 1
+            }
+            MIN_SUPPORTED="$ANDROID_MIN_OVERRIDE"
+          elif [ "$ANDROID_MANDATORY" = "true" ]; then
+            MIN_SUPPORTED="$VERSION"
+          else
+            MIN_SUPPORTED="$CURRENT_MIN"
+          fi
+
+          HIGHEST=$(printf '%s\n%s\n' "$MIN_SUPPORTED" "$VERSION" | sort -V | tail -n1)
+          [ "$HIGHEST" = "$VERSION" ] || {
+            echo "❌ Le plancher $MIN_SUPPORTED dépasse la version publiée $VERSION"
+            echo "   Pour la migration initiale 1.0.0, utiliser min_supported_override=0.0.0."
+            exit 1
+          }
+
+          jq --arg min "$MIN_SUPPORTED" --arg message "$ANDROID_MESSAGE" '
+            .minSupported = $min
+            | .message = (if $message == "" then null else $message end)
+          ' upload/android-release.json > upload/latest.json
+          jq -e '.platform == "android" and .schemaVersion == 1' upload/latest.json >/dev/null
+          jq '{latest, minSupported, message, downloadUrl, sha256}' upload/latest.json
+
+      - name: Upload de l'APK Android
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/Nartya-*-android.apk"
+          target: "/var/www/nartya/dl/android/"
+          strip_components: 1
+
+      # Le manifeste est copié sous un nom invisible pour l'API, puis déplacé atomiquement.
+      - name: Prépare le manifeste Android hors ligne
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/latest.json"
+          target: "/var/www/nartya/dl/android/.incoming-${{ github.run_id }}/"
+          strip_components: 1
+
+      - name: Bascule atomique de la politique Android
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -eu
+            incoming="/var/www/nartya/dl/android/.incoming-${{ github.run_id }}/latest.json"
+            live="/var/www/nartya/dl/android/latest.json"
+            test -s "$incoming"
+            mv -f "$incoming" "$live"
+            rmdir "/var/www/nartya/dl/android/.incoming-${{ github.run_id }}"
+
+      - name: Résumé
+        run: |
+          echo "✅ Android publié sur https://nartya.app/dl/android/"
+          echo "Vérifie : curl -s https://nartya.app/dl/android/latest.json"

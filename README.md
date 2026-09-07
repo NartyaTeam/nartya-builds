@@ -6,7 +6,7 @@ et VOSTFR, avec reprise de lecture, listes personnelles, et visionnage entre ami
 ## Les apps
 
 - **Nartya Anime** — le catalogue complet d'anime en streaming.
-- **Nartya Movies** — films et séries, bientôt disponible.
+- **Nartya Movies** — films et séries en streaming, VF et VOSTFR.
 - **Nartya Hub** — le launcher qui installe, met à jour et lance toutes les apps Nartya
   depuis un seul endroit, avec une session unique.
 

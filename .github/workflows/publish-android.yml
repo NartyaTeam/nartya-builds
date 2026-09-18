@@ -35,6 +35,10 @@ jobs:
     env:
       EXPECTED_ANDROID_CERT_SHA256: eab57f31e33f4b2c4ccf437502a33b6d35a3bae1fc6f6630d6e9c038523d665c
     steps:
+      # L'action `discord-release` vit dans ce dépôt : sans checkout, `uses: ./…` ne résout rien.
+      - name: Checkout (pour l'action de note de version)
+        uses: actions/checkout@v4
+
       - name: Récupère l'APK déjà vérifiée (aucun rebuild)
         uses: actions/download-artifact@v4
         with:
@@ -46,6 +50,7 @@ jobs:
       - uses: android-actions/setup-android@v3
 
       - name: Vérifie l'APK et prépare la politique Android
+        id: manifest
         shell: bash
         env:
           ANDROID_MANDATORY: ${{ inputs.mandatory }}
@@ -117,6 +122,7 @@ jobs:
           ' upload/android-release.json > upload/latest.json
           jq -e '.platform == "android" and .schemaVersion == 1' upload/latest.json >/dev/null
           jq '{latest, minSupported, message, downloadUrl, sha256}' upload/latest.json
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Upload de l'APK Android
         uses: appleboy/scp-action@v0.1.7
@@ -160,3 +166,17 @@ jobs:
         run: |
           echo "✅ Android publié sur https://nartya.app/dl/android/"
           echo "Vérifie : curl -s https://nartya.app/dl/android/latest.json"
+
+      # Note de version Discord — dernier geste, une fois la version réellement en ligne.
+      # Ne peut pas faire échouer la publication : l'action avertit et rend la main.
+      - name: Note de version sur Discord
+        uses: ./.github/actions/discord-release
+        with:
+          webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          app: android
+          version: ${{ steps.manifest.outputs.version }}
+          changelog-file: upload/latest.json
+          vps-host: ${{ secrets.VPS_HOST }}
+          vps-user: ${{ secrets.VPS_USER }}
+          vps-key: ${{ secrets.VPS_SSH_KEY }}
+          vps-port: ${{ secrets.VPS_PORT }}

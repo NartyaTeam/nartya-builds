@@ -18,6 +18,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # L'action `discord-release` vit dans ce dépôt : sans checkout, `uses: ./…` ne résout rien.
+      - name: Checkout (pour l'action de note de version)
+        uses: actions/checkout@v4
+
       - name: Récupère les artefacts desktop vérifiés (aucun rebuild)
         uses: actions/download-artifact@v4
         with:
@@ -27,12 +31,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Vérifie le manifeste desktop
+        id: manifest
         run: |
           set -euo pipefail
           ls -lh upload
           test -s upload/manifest.json
           test -s upload/SHA256SUMS.txt
-          node -e "console.log(require('./upload/manifest.json').version)"
+          VERSION=$(node -p "require('./upload/manifest.json').version")
+          echo "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Upload des binaires desktop vers le VPS
         uses: appleboy/scp-action@v0.1.7
@@ -61,3 +68,17 @@ jobs:
         run: |
           echo "✅ Desktop publié sur https://nartya.app/dl/anime/"
           echo "Vérifie : curl -s https://nartya.app/dl/anime/manifest.json"
+
+      # Note de version Discord — dernier geste, une fois la version réellement en ligne.
+      # Ne peut pas faire échouer la publication : l'action avertit et rend la main.
+      - name: Note de version sur Discord
+        uses: ./.github/actions/discord-release
+        with:
+          webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          app: anime
+          version: ${{ steps.manifest.outputs.version }}
+          changelog-file: upload/manifest.json
+          vps-host: ${{ secrets.VPS_HOST }}
+          vps-user: ${{ secrets.VPS_USER }}
+          vps-key: ${{ secrets.VPS_SSH_KEY }}
+          vps-port: ${{ secrets.VPS_PORT }}

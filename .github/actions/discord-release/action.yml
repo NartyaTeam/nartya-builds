@@ -1,0 +1,111 @@
+name: "Note de version Discord"
+description: "Poste sur Discord le changelog d'une version qui vient d'être rendue publique."
+
+# Une seule implémentation pour les quatre zones (anime, movies, android, hub). Le texte vient
+# du changelog DÉJÀ publié avec la version : rien n'est rédigé ici, donc rien à resynchroniser.
+#
+# Anti-doublon : quand les accès VPS sont fournis, le marqueur `.posted-<version>` est créé par
+# `mkdir`, qui est atomique — deux exécutions concurrentes ou un workflow relancé ne peuvent pas
+# poster deux fois. Sans accès VPS (cas du hub, qui ne touche pas au feed), l'appelant est
+# responsable de ne déclencher l'action que sur une vraie transition brouillon → public.
+
+inputs:
+  webhook:
+    description: "URL du webhook Discord (secret DISCORD_RELEASE_WEBHOOK)"
+    required: true
+  app:
+    description: "anime | movies | android | hub"
+    required: true
+  version:
+    description: "Version publiée (avec ou sans le v)"
+    required: true
+  changelog-file:
+    description: "JSON contenant le changelog (manifeste de l'app, ou tableau brut)"
+    required: true
+  vps-host:
+    description: "Hôte VPS — active l'anti-doublon. Vide = post direct, sans marqueur."
+    required: false
+    default: ""
+  vps-user:
+    required: false
+    default: ""
+  vps-key:
+    required: false
+    default: ""
+  vps-port:
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Construit la note de version
+      id: payload
+      shell: bash
+      # Un changelog manquant ou sans entrée pour cette version ne doit PAS faire échouer la
+      # publication : la version est déjà en ligne à ce stade. On signale et on s'arrête là.
+      run: |
+        set -uo pipefail
+        if node "${{ github.action_path }}/build-payload.mjs" \
+             "${{ inputs.changelog-file }}" "${{ inputs.app }}" "${{ inputs.version }}" \
+             "$RUNNER_TEMP/discord-payload.json"; then
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Note de version non publiée sur Discord (changelog absent ou incomplet) — la version reste publiée normalement."
+        fi
+
+    - name: Dépose la note sur le VPS
+      if: inputs.vps-host != '' && steps.payload.outputs.ready == 'true'
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ inputs.vps-host }}
+        username: ${{ inputs.vps-user }}
+        key: ${{ inputs.vps-key }}
+        port: ${{ inputs.vps-port }}
+        source: ${{ runner.temp }}/discord-payload.json
+        target: "/tmp/nartya-discord-${{ github.run_id }}/"
+        strip_components: 10
+
+    - name: Poste sur Discord (avec marqueur anti-doublon)
+      if: inputs.vps-host != '' && steps.payload.outputs.ready == 'true'
+      uses: appleboy/ssh-action@v1.2.0
+      with:
+        host: ${{ inputs.vps-host }}
+        username: ${{ inputs.vps-user }}
+        key: ${{ inputs.vps-key }}
+        port: ${{ inputs.vps-port }}
+        envs: WEBHOOK
+        script: |
+          set -eu
+          payload="/tmp/nartya-discord-${{ github.run_id }}/discord-payload.json"
+          marker="/var/www/nartya/dl/${{ inputs.app }}/.posted-${{ inputs.version }}"
+          if mkdir "$marker" 2>/dev/null; then
+            # Le marqueur nous appartient : on est le seul à poster cette version.
+            if curl -fsS -X POST -H "Content-Type: application/json" --data-binary "@$payload" "$WEBHOOK" >/dev/null; then
+              echo "✅ note de version postée sur Discord"
+            else
+              # Marqueur retiré : l'échec ne doit pas condamner définitivement cette version.
+              rmdir "$marker" || true
+              echo "⚠️ Discord n'a pas répondu — note non postée, version publiée quand même"
+            fi
+          else
+            echo "↩️ ${{ inputs.app }} ${{ inputs.version }} : note déjà postée, on ne reposte pas"
+          fi
+          rm -rf "/tmp/nartya-discord-${{ github.run_id }}"
+      env:
+        WEBHOOK: ${{ inputs.webhook }}
+
+    - name: Poste sur Discord (sans VPS)
+      if: inputs.vps-host == '' && steps.payload.outputs.ready == 'true'
+      shell: bash
+      env:
+        WEBHOOK: ${{ inputs.webhook }}
+      run: |
+        set -uo pipefail
+        if curl -fsS -X POST -H "Content-Type: application/json" \
+             --data-binary "@$RUNNER_TEMP/discord-payload.json" "$WEBHOOK" >/dev/null; then
+          echo "✅ note de version postée sur Discord"
+        else
+          echo "::warning::Discord n'a pas répondu — note non postée, version publiée quand même."
+        fi

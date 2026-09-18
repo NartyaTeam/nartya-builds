@@ -26,6 +26,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # L'action `discord-release` vit dans ce dépôt : sans checkout, `uses: ./…` ne résout rien.
+      - name: Checkout (pour l'action de note de version)
+        uses: actions/checkout@v4
+
       - name: Récupère les artefacts déjà build + vérifiés (aucun rebuild)
         uses: actions/download-artifact@v4
         with:
@@ -35,13 +39,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Vérifie que la version du manifest correspond à l'attendu
+        id: manifest
         run: |
+          set -euo pipefail
           echo "Contenu à publier :"
           ls -lh upload
           echo ""
-          echo "Version dans manifest.json :"
-          node -e "console.log(require('./upload/manifest.json').version)" 2>/dev/null \
-            || (grep -m1 '"version"' upload/manifest.json)
+          VERSION=$(node -p "require('./upload/manifest.json').version")
+          echo "Version dans manifest.json : $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Upload des binaires vers le VPS
         uses: appleboy/scp-action@v0.1.7
@@ -69,3 +75,17 @@ jobs:
         run: |
           echo "✅ Publié sur https://nartya.app/dl/movies/"
           echo "Vérifie : curl -s https://nartya.app/dl/movies/manifest.json"
+
+      # Note de version Discord — dernier geste, une fois la version réellement en ligne.
+      # Ne peut pas faire échouer la publication : l'action avertit et rend la main.
+      - name: Note de version sur Discord
+        uses: ./.github/actions/discord-release
+        with:
+          webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          app: movies
+          version: ${{ steps.manifest.outputs.version }}
+          changelog-file: upload/manifest.json
+          vps-host: ${{ secrets.VPS_HOST }}
+          vps-user: ${{ secrets.VPS_USER }}
+          vps-key: ${{ secrets.VPS_SSH_KEY }}
+          vps-port: ${{ secrets.VPS_PORT }}

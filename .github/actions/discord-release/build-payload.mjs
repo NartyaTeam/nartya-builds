@@ -9,10 +9,11 @@
  *
  * ⚠️ Message en CONTENU, pas en embed. Le format maison s'appuie sur `##` et `-#`, et surtout
  * sur les emojis perso du serveur : un embed ne les rend ni dans son titre ni dans son footer.
- * Contrepartie : 2000 caractères maximum, d'où la troncature annoncée plus bas.
+ * Contrepartie : 2000 caractères par message, d'où le découpage en plusieurs messages.
  *
- * Usage : build-payload.mjs <fichier-json> <app> <version> <sortie>
+ * Usage : build-payload.mjs <fichier-json> <app> <version> <préfixe-sortie>
  *   <fichier-json> : manifeste (objet avec `changelog`) ou tableau de changelog directement.
+ *   Écrit `<préfixe>-1.json`, `<préfixe>-2.json`… un fichier par message, à poster dans l'ordre.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -52,6 +53,8 @@ const TYPES = [
 ];
 
 const CONTENT_MAX = 2000; // limite Discord pour le contenu d'un message
+// Au-delà, la note tournerait au mur de messages : le reste est renvoyé vers l'app.
+const MAX_MESSAGES = 3;
 const SIGNATURE = "-# 朱 ・ Merci d'utiliser Nartya";
 
 const [file, appId, rawVersion, out] = process.argv.slice(2);
@@ -120,18 +123,36 @@ const header = [
 
 const footer = ["", `-# ${app.update}`, SIGNATURE];
 
-// Troncature : on coupe à la ligne entière et on l'annonce, plutôt que de laisser Discord
-// rejeter le message (ou de couper au milieu d'une phrase).
-const assemble = (kept, truncated) =>
-  [...header, ...kept, ...(truncated ? ["-# …et d'autres changements, à découvrir dans l'app."] : []), ...footer].join("\n");
+// Découpage à la ligne entière : l'en-tête ouvre le premier message, le pied ferme le dernier.
+const TRUNCATED = "-# …et d'autres changements, à découvrir dans l'app.";
+const fits = (parts) => parts.join("\n").length <= CONTENT_MAX;
 
-let kept = lines;
-while (kept.length > 1 && assemble(kept, kept.length < lines.length).length > CONTENT_MAX) {
-  kept = kept.slice(0, -1);
+const messages = [];
+let current = [...header];
+let dropped = 0;
+for (const [i, line] of lines.entries()) {
+  if (fits([...current, line])) {
+    current.push(line);
+    continue;
+  }
+  if (messages.length + 1 >= MAX_MESSAGES) {
+    dropped = lines.length - i;
+    break;
+  }
+  messages.push(current);
+  current = [line];
 }
-const content = assemble(kept, kept.length < lines.length);
+const tail = [...(dropped ? [TRUNCATED] : []), ...footer];
+while (!fits([...current, ...tail]) && current.length > 1) {
+  current.pop();
+  if (!dropped) tail.unshift(TRUNCATED);
+  dropped++;
+}
+messages.push([...current, ...tail]);
 
-writeFileSync(out, JSON.stringify({ username: "Nartya", content }));
+messages.forEach((parts, i) => {
+  writeFileSync(`${out}-${i + 1}.json`, JSON.stringify({ username: "Nartya", content: parts.join("\n") }));
+});
 console.log(
-  `✅ note de version prête : ${app.name} ${version} — ${kept.length}/${lines.length} ligne(s), ${content.length} caractères`
+  `✅ note de version prête : ${app.name} ${version} — ${lines.length - dropped}/${lines.length} ligne(s) en ${messages.length} message(s)`
 );

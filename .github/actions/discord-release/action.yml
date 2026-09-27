@@ -46,9 +46,10 @@ runs:
       # publication : la version est déjà en ligne à ce stade. On signale et on s'arrête là.
       run: |
         set -uo pipefail
+        mkdir -p discord-note
         if node "${{ github.action_path }}/build-payload.mjs" \
              "${{ inputs.changelog-file }}" "${{ inputs.app }}" "${{ inputs.version }}" \
-             "$RUNNER_TEMP/discord-payload.json"; then
+             "discord-note/discord-payload"; then
           echo "ready=true" >> "$GITHUB_OUTPUT"
         else
           echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -63,9 +64,9 @@ runs:
         username: ${{ inputs.vps-user }}
         key: ${{ inputs.vps-key }}
         port: ${{ inputs.vps-port }}
-        source: ${{ runner.temp }}/discord-payload.json
+        source: "discord-note/discord-payload-*.json"
         target: "/tmp/nartya-discord-${{ github.run_id }}/"
-        strip_components: 10
+        strip_components: 1
 
     - name: Poste sur Discord (avec marqueur anti-doublon)
       if: inputs.vps-host != '' && steps.payload.outputs.ready == 'true'
@@ -78,17 +79,26 @@ runs:
         envs: WEBHOOK
         script: |
           set -eu
-          payload="/tmp/nartya-discord-${{ github.run_id }}/discord-payload.json"
+          dir="/tmp/nartya-discord-${{ github.run_id }}"
           marker="/var/www/nartya/dl/${{ inputs.app }}/.posted-${{ inputs.version }}"
           if mkdir "$marker" 2>/dev/null; then
             # Le marqueur nous appartient : on est le seul à poster cette version.
-            if curl -fsS -X POST -H "Content-Type: application/json" --data-binary "@$payload" "$WEBHOOK" >/dev/null; then
-              echo "✅ note de version postée sur Discord"
-            else
-              # Marqueur retiré : l'échec ne doit pas condamner définitivement cette version.
-              rmdir "$marker" || true
-              echo "⚠️ Discord n'a pas répondu — note non postée, version publiée quand même"
-            fi
+            n=0
+            for payload in $(ls "$dir"/discord-payload-*.json | sort -V); do
+              if [ "$n" -gt 0 ]; then sleep 1; fi
+              if curl -fsS -X POST -H "Content-Type: application/json" --data-binary "@$payload" "$WEBHOOK" >/dev/null; then
+                n=$((n + 1))
+              elif [ "$n" -eq 0 ]; then
+                # Rien n'est parti : marqueur retiré pour ne pas condamner cette version.
+                rmdir "$marker" || true
+                echo "⚠️ Discord n'a pas répondu — note non postée, version publiée quand même"
+                break
+              else
+                echo "⚠️ Discord n'a pas répondu — note postée en partie ($n message(s))"
+                break
+              fi
+            done
+            if [ "$n" -gt 0 ]; then echo "✅ note de version postée sur Discord ($n message(s))"; fi
           else
             echo "↩️ ${{ inputs.app }} ${{ inputs.version }} : note déjà postée, on ne reposte pas"
           fi
@@ -103,9 +113,14 @@ runs:
         WEBHOOK: ${{ inputs.webhook }}
       run: |
         set -uo pipefail
-        if curl -fsS -X POST -H "Content-Type: application/json" \
-             --data-binary "@$RUNNER_TEMP/discord-payload.json" "$WEBHOOK" >/dev/null; then
-          echo "✅ note de version postée sur Discord"
-        else
-          echo "::warning::Discord n'a pas répondu — note non postée, version publiée quand même."
-        fi
+        n=0
+        for payload in $(ls discord-note/discord-payload-*.json | sort -V); do
+          if [ "$n" -gt 0 ]; then sleep 1; fi
+          if ! curl -fsS -X POST -H "Content-Type: application/json" \
+               --data-binary "@$payload" "$WEBHOOK" >/dev/null; then
+            echo "::warning::Discord n'a pas répondu — note postée en partie ($n message(s)), version publiée quand même."
+            exit 0
+          fi
+          n=$((n + 1))
+        done
+        echo "✅ note de version postée sur Discord ($n message(s))"

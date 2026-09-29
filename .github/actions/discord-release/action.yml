@@ -1,7 +1,7 @@
 name: "Note de version Discord"
 description: "Poste sur Discord le changelog d'une version qui vient d'être rendue publique."
 
-# Une seule implémentation pour les quatre zones (anime, movies, android, hub). Le texte vient
+# Une seule implémentation pour les cinq zones (anime, movies, android, ios, hub). Le texte vient
 # du changelog DÉJÀ publié avec la version : rien n'est rédigé ici, donc rien à resynchroniser.
 #
 # Anti-doublon : quand les accès VPS sont fournis, le marqueur `.posted-<version>` est créé par
@@ -14,7 +14,7 @@ inputs:
     description: "URL du webhook Discord (secret DISCORD_RELEASE_WEBHOOK)"
     required: true
   app:
-    description: "anime | movies | android | hub"
+    description: "anime | movies | android | ios | hub"
     required: true
   version:
     description: "Version publiée (avec ou sans le v)"

@@ -43,6 +43,11 @@ const APPS = {
     emoji: "📱",
     update: "Téléchargez la nouvelle version sur https://nartya.app/",
   },
+  ios: {
+    name: "Nartya iOS",
+    emoji: "🍏",
+    update: "Ouvrez **SideStore** → onglet **Mises à jour** (source : https://nartya.app/dl/ios/source.json).",
+  },
 };
 
 /** Un préfixe par type de changement, dans l'ordre de lecture : le neuf d'abord. */

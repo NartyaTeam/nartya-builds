@@ -1,0 +1,185 @@
+name: Build iOS
+
+# Compile l'IPA iOS NON signée : SideStore / AltStore / Sideloadly la re-signent avec l'Apple
+# ID de chaque utilisateur, aucun certificat n'est donc nécessaire ici. Le tag `ios-vX.Y.Z`
+# et `ios/version.json` forment un cycle de release indépendant du desktop et d'Android.
+# Déclenchement manuel uniquement, comme Android.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag iOS NartyaTeam/nartya à compiler (ex. ios-v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    env:
+      RELEASE_REF: ${{ inputs.ref }}
+    steps:
+      - name: Refuse toute ref autre qu'un tag iOS stable
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_REF" =~ ^ios-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Le build iOS exige un tag ios-vX.Y.Z, reçu : $RELEASE_REF"
+            exit 1
+          fi
+
+      - name: Checkout du tag privé
+        uses: actions/checkout@v4
+        with:
+          repository: NartyaTeam/nartya
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Sélectionne le Xcode le plus récent du runner
+        shell: bash
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n1)
+          [ -n "$XCODE" ] && sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vérifie la cohérence du tag et de la version iOS
+        id: version
+        shell: bash
+        run: |
+          git show-ref --verify --quiet "refs/tags/$RELEASE_REF" || {
+            echo "❌ $RELEASE_REF n'est pas un tag du dépôt source"
+            exit 1
+          }
+          [ "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_REF^{commit}")" ] || {
+            echo "❌ Le checkout ne correspond pas au commit du tag $RELEASE_REF"
+            exit 1
+          }
+          node <<'NODE'
+          const refVersion = process.env.RELEASE_REF.replace(/^ios-v/, "");
+          const { versionName, buildNumber } = require("./ios/version.json");
+          if (versionName !== refVersion || !/^\d+\.\d+\.\d+$/.test(versionName) ||
+              !Number.isSafeInteger(buildNumber) || buildNumber < 1) {
+            console.error({ refVersion, versionName, buildNumber });
+            process.exit(1);
+          }
+          console.log(`✅ iOS ${versionName} (build ${buildNumber})`);
+          NODE
+          echo "version=$(node -p 'require("./ios/version.json").versionName')" >> "$GITHUB_OUTPUT"
+          echo "build=$(node -p 'require("./ios/version.json").buildNumber')" >> "$GITHUB_OUTPUT"
+
+      - name: Tests (interface + moteur natif Swift)
+        run: |
+          npm run test:unit
+          npm run ios:test
+
+      - name: Build web et synchronisation Capacitor
+        run: npm run ios:sync
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Compile l'app iOS (Release, non signée)
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tail -n 20
+
+      - name: Vérifie l'app puis emballe l'IPA
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          set -euo pipefail
+          APP=build/Build/Products/Release-iphoneos/App.app
+          test -d "$APP"
+          PLIST="$APP/Info.plist"
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = "com.nartya.app" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")" = "$VERSION" ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")" = "$BUILD" ]
+          test -f "$APP/public/index.html"
+
+          mkdir -p ios-release Payload
+          cp -R "$APP" Payload/
+          TARGET="ios-release/Nartya-${VERSION}-ios.ipa"
+          # -y : conserve les liens symboliques des frameworks ; structure Payload/App.app exigée.
+          zip -qry "$TARGET" Payload
+          unzip -l "$TARGET" | grep -q ' Payload/App.app/Info.plist$'
+
+          cp ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png ios-release/icon.png
+          node scripts/gen-ios-release-manifest.mjs "$TARGET" \
+            --version "$VERSION" \
+            --base-url "https://nartya.app/dl/ios/" \
+            --out ios-release/ios-release.json \
+            --source-out ios-release/source-entry.json
+          (cd ios-release && shasum -a 256 "Nartya-${VERSION}-ios.ipa" icon.png > ios-SHA256SUMS.txt)
+          ls -lh ios-release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-ios
+          path: ios-release/**
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: ios
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-ios
+          path: upload
+
+      - name: Vérifie les empreintes et les manifestes iOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upload
+          sha256sum --check ios-SHA256SUMS.txt
+          jq -e '.platform == "ios" and .schemaVersion == 1' ios-release.json >/dev/null
+          jq -e '.apps[0].bundleIdentifier == "com.nartya.app"' source-entry.json >/dev/null
+
+      - name: Scan de l'IPA sur VirusTotal
+        uses: crazy-max/ghaction-virustotal@v4
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          files: upload/Nartya-*.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-ios
+          path: upload/**
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Résumé — prochaine étape
+        run: |
+          echo "✅ Build iOS terminé pour ${{ inputs.ref }}."
+          echo "Run ID : ${GITHUB_RUN_ID}"
+          echo "Publication : Actions → Publish iOS (manual) → ${GITHUB_RUN_ID}"

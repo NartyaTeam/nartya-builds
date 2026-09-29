@@ -1,0 +1,185 @@
+name: Publish iOS (manual)
+
+# Porte d'approbation iOS. Reprend l'artefact `dist-ios` déjà construit, vérifié et scanné,
+# publie d'abord l'IPA et l'icône, puis bascule d'un coup le manifeste lu par l'API
+# (`latest.json`) et la source SideStore/AltStore (`source.json`).
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID du workflow 'Build iOS' à publier"
+        required: true
+        type: string
+      mandatory:
+        description: "Rendre cette mise à jour iOS obligatoire immédiatement"
+        required: true
+        default: false
+        type: boolean
+      message:
+        description: "Message affiché avec la mise à jour (facultatif)"
+        required: false
+        default: ""
+        type: string
+      min_supported_override:
+        description: "Plancher explicite (migration/rollback uniquement, sinon vide)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # L'action `discord-release` vit dans ce dépôt : sans checkout, `uses: ./…` ne résout rien.
+      - name: Checkout (pour l'action de note de version)
+        uses: actions/checkout@v4
+
+      - name: Récupère l'IPA déjà vérifiée (aucun rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-ios
+          path: upload
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Vérifie l'IPA, prépare la politique iOS et la source SideStore
+        id: manifest
+        shell: bash
+        env:
+          IOS_MANDATORY: ${{ inputs.mandatory }}
+          IOS_MESSAGE: ${{ inputs.message }}
+          IOS_MIN_OVERRIDE: ${{ inputs.min_supported_override }}
+        run: |
+          set -euo pipefail
+          [ ${#IOS_MESSAGE} -le 280 ] || { echo "❌ Le message iOS dépasse 280 caractères"; exit 1; }
+          test -s upload/ios-release.json
+          test -s upload/source-entry.json
+          test -s upload/icon.png
+          IPA=$(find upload -maxdepth 1 -type f -name 'Nartya-*-ios.ipa' -print -quit)
+          test -n "$IPA"
+
+          EXPECTED_SHA=$(jq -er '.sha256 | select(test("^[a-f0-9]{64}$"))' upload/ios-release.json)
+          ACTUAL_SHA=$(sha256sum "$IPA" | cut -d' ' -f1)
+          [ "$EXPECTED_SHA" = "$ACTUAL_SHA" ] || { echo "❌ SHA-256 iOS incohérent"; exit 1; }
+          unzip -l "$IPA" | grep -q ' Payload/App.app/Info.plist$' || { echo "❌ IPA sans Payload/App.app"; exit 1; }
+
+          VERSION=$(jq -er '.latest | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' upload/ios-release.json)
+          [ "$(basename "$IPA")" = "Nartya-${VERSION}-ios.ipa" ] || { echo "❌ Nom d'IPA inattendu"; exit 1; }
+
+          CURRENT_MIN=0.0.0
+          if curl -fsS https://nartya.app/dl/ios/latest.json -o current-ios.json; then
+            CANDIDATE=$(jq -r '.minSupported // "0.0.0"' current-ios.json)
+            if [[ "$CANDIDATE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then CURRENT_MIN="$CANDIDATE"; fi
+          fi
+
+          if [ -n "$IOS_MIN_OVERRIDE" ] && [ "$IOS_MANDATORY" = "true" ]; then
+            echo "❌ Choisir mandatory OU min_supported_override, pas les deux"
+            exit 1
+          fi
+          if [ -n "$IOS_MIN_OVERRIDE" ]; then
+            [[ "$IOS_MIN_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "❌ Plancher iOS explicite invalide"; exit 1; }
+            MIN_SUPPORTED="$IOS_MIN_OVERRIDE"
+          elif [ "$IOS_MANDATORY" = "true" ]; then
+            MIN_SUPPORTED="$VERSION"
+          else
+            MIN_SUPPORTED="$CURRENT_MIN"
+          fi
+          HIGHEST=$(printf '%s\n%s\n' "$MIN_SUPPORTED" "$VERSION" | sort -V | tail -n1)
+          [ "$HIGHEST" = "$VERSION" ] || { echo "❌ Le plancher $MIN_SUPPORTED dépasse la version publiée $VERSION"; exit 1; }
+
+          jq --arg min "$MIN_SUPPORTED" --arg message "$IOS_MESSAGE" '
+            .minSupported = $min
+            | .message = (if $message == "" then null else $message end)
+          ' upload/ios-release.json > upload/latest.json
+          # Sans ce marqueur, l'app iOS ignore la politique : garde-fou avant publication.
+          jq -e '.platform == "ios" and .schemaVersion == 1' upload/latest.json >/dev/null
+
+          # Source SideStore : la nouvelle version en tête, les versions déjà en ligne derrière
+          # (au plus 9), pour garder un retour arrière possible depuis l'app de sideload.
+          echo '{}' > current-source.json
+          curl -fsS https://nartya.app/dl/ios/source.json -o current-source.json || echo '{}' > current-source.json
+          jq --slurpfile previous current-source.json --arg version "$VERSION" '
+            .apps[0].versions += (
+              [ $previous[0].apps[]?
+                | select(.bundleIdentifier == "com.nartya.app")
+                | .versions[]?
+                | select(.version != $version) ][:9]
+            )
+          ' upload/source-entry.json > upload/source.json
+          jq -e '.apps[0].versions[0].version == $v' --arg v "$VERSION" upload/source.json >/dev/null
+          jq '{latest, minSupported, message}' upload/latest.json
+          jq '[.apps[0].versions[].version]' upload/source.json
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Prépare le dossier iOS sur le VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -eu
+            mkdir -p /var/www/nartya/dl/ios
+
+      - name: Upload de l'IPA et de l'icône
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/Nartya-*-ios.ipa,upload/icon.png"
+          target: "/var/www/nartya/dl/ios/"
+          strip_components: 1
+
+      # Manifeste et source copiés sous un nom invisible, puis déplacés atomiquement.
+      - name: Prépare le manifeste et la source hors ligne
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/latest.json,upload/source.json"
+          target: "/var/www/nartya/dl/ios/.incoming-${{ github.run_id }}/"
+          strip_components: 1
+
+      - name: Bascule atomique de la politique iOS et de la source SideStore
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -eu
+            incoming="/var/www/nartya/dl/ios/.incoming-${{ github.run_id }}"
+            test -s "$incoming/latest.json"
+            test -s "$incoming/source.json"
+            mv -f "$incoming/source.json" /var/www/nartya/dl/ios/source.json
+            mv -f "$incoming/latest.json" /var/www/nartya/dl/ios/latest.json
+            rmdir "$incoming"
+
+      - name: Résumé
+        run: |
+          echo "✅ iOS publié sur https://nartya.app/dl/ios/"
+          echo "Source SideStore : https://nartya.app/dl/ios/source.json"
+          echo "Vérifie : curl -s https://nartya.app/dl/ios/latest.json"
+
+      # Note de version Discord — dernier geste, une fois la version réellement en ligne.
+      - name: Note de version sur Discord
+        uses: ./.github/actions/discord-release
+        with:
+          webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          app: ios
+          version: ${{ steps.manifest.outputs.version }}
+          changelog-file: upload/latest.json
+          vps-host: ${{ secrets.VPS_HOST }}
+          vps-user: ${{ secrets.VPS_USER }}
+          vps-key: ${{ secrets.VPS_SSH_KEY }}
+          vps-port: ${{ secrets.VPS_PORT }}

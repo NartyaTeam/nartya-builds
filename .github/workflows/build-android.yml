@@ -49,6 +49,10 @@ jobs:
           java-version: "21"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # Le paquet historique `tools` (défaut de l'action) n'existe plus dans les
+          # cmdline-tools récents du runner : sdkmanager échouait.
+          packages: platform-tools
 
       - uses: gradle/actions/setup-gradle@v4
 

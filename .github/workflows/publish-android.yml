@@ -48,6 +48,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: android-actions/setup-android@v3
+        with:
+          # Le paquet historique `tools` (défaut de l'action) n'existe plus dans les
+          # cmdline-tools récents du runner : sdkmanager échouait.
+          packages: platform-tools
 
       - name: Vérifie l'APK et prépare la politique Android
         id: manifest

@@ -1,7 +1,6 @@
 name: Build anime
 
-# Compile uniquement l'app desktop Nartya Anime. Le code source vit dans le repo privé
-# `NartyaTeam/nartya`, récupéré via un PAT dédié en lecture seule.
+# Compile uniquement l'app desktop Nartya Anime, depuis le repo public `NartyaTeam/nartya`.
 #
 # Déclenchement 100% MANUEL, jamais sur `pull_request`. Ce workflow NE PUBLIE RIEN :
 # la mise en ligne reste une approbation séparée dans publish-anime.yml.
@@ -24,12 +23,11 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout du code source privé (NartyaTeam/nartya)
+      - name: Checkout du code source (NartyaTeam/nartya, public)
         uses: actions/checkout@v4
         with:
           repository: NartyaTeam/nartya
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -92,12 +90,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout du code source privé (pour scripts/gen-release-manifest.mjs)
+      - name: Checkout du code source (pour scripts/gen-release-manifest.mjs)
         uses: actions/checkout@v4
         with:
           repository: NartyaTeam/nartya
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:

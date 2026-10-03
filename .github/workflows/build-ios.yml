@@ -29,12 +29,11 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout du tag privé
+      - name: Checkout du tag
         uses: actions/checkout@v4
         with:
           repository: NartyaTeam/nartya
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4

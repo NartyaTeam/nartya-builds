@@ -16,4 +16,4 @@ et VOSTFR, avec reprise de lecture, listes personnelles, et visionnage entre ami
 
 ---
 
-*Ce repo héberge la compilation continue des apps Nartya — le code source, lui, reste privé.*
+*Ce repo héberge la compilation continue des apps Nartya. Le code de l'app anime est public : [NartyaTeam/nartya](https://github.com/NartyaTeam/nartya).*

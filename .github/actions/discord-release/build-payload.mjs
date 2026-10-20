@@ -25,17 +25,17 @@ import { readFileSync, writeFileSync } from "node:fs";
 const APPS = {
   anime: {
     name: "Nartya Anime",
-    emoji: "<:anime:1532491182104645682>",
-    update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/hub",
+    emoji: "<:anime:1556704373252427876>",
+    update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/",
   },
   movies: {
     name: "Nartya Movies",
-    emoji: "<:movie:1532491318192771112>",
-    update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/hub",
+    emoji: "<:movie:1556704400615932055>",
+    update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/",
   },
   hub: {
     name: "Nartya Hub",
-    emoji: "<:hub:1532491120075079921>",
+    emoji: "<:hub:1556704428982272061>",
     update: "Le Hub se met à jour tout seul : il vous propose la nouvelle version au démarrage. Sinon : https://nartya.app/",
   },
   android: {

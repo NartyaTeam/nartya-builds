@@ -48,6 +48,16 @@ const APPS = {
     emoji: "🍏",
     update: "Ouvrez **SideStore** → onglet **Mises à jour** (source : https://nartya.app/dl/ios/source.json).",
   },
+  "movies-android": {
+    name: "Nartya Movies Android",
+    emoji: "📱",
+    update: "La mise à jour se propose dans l'app (menu **Plus**). Sinon : https://nartya.app/",
+  },
+  "movies-ios": {
+    name: "Nartya Movies iOS",
+    emoji: "🍏",
+    update: "Ouvrez **SideStore** → onglet **Mises à jour** (source : https://nartya.app/dl/movies-ios/source.json).",
+  },
 };
 
 /** Un préfixe par type de changement, dans l'ordre de lecture : le neuf d'abord. */

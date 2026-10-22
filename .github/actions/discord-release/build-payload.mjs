@@ -35,8 +35,7 @@ const APPS = {
   },
   fm: {
     name: "Nartya FM",
-    // Pas encore d'emoji perso sur le serveur : à remplacer par `<:fm:…>` une fois ajouté.
-    emoji: "📻",
+    emoji: "<:fm:1562938719122493451>",
     update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/",
   },
   hub: {

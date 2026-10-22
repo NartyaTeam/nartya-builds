@@ -1,0 +1,91 @@
+name: Publish FM (manual)
+
+# Déclenchement 100% MANUEL — porte d'approbation pour la mise en ligne sur le feed
+# auto-hébergé https://nartya.app/dl/fm/. Aucun push ne lance ce workflow.
+#
+# Marche à suivre :
+#   1. Actions → "Build FM" → Run workflow → indiquer le tag/branche à compiler.
+#   2. Vérifier ce run (logs de build, liens VirusTotal) une fois terminé.
+#   3. Si tout est bon : Actions → "Publish FM (manual)" → Run workflow → coller le run_id
+#      affiché à la fin du job `verify` de l'étape 1.
+#   4. Ce workflow reprend TEL QUEL l'artefact `dist-final` de ce run précis (aucun rebuild)
+#      et l'envoie sur le VPS.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID du workflow 'Build FM' à publier (affiché dans son dernier step)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # L'action `discord-release` vit dans ce dépôt : sans checkout, `uses: ./…` ne résout rien.
+      - name: Checkout (pour l'action de note de version)
+        uses: actions/checkout@v4
+
+      - name: Récupère les artefacts déjà build + vérifiés (aucun rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-final
+          path: upload
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Vérifie que la version du manifest correspond à l'attendu
+        id: manifest
+        run: |
+          set -euo pipefail
+          echo "Contenu à publier :"
+          ls -lh upload
+          echo ""
+          VERSION=$(node -p "require('./upload/manifest.json').version")
+          echo "Version dans manifest.json : $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload des binaires vers le VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/Nartya FM-*,upload/*.blockmap"
+          target: "/var/www/nartya/dl/fm/"
+          strip_components: 1
+
+      - name: Upload des métadonnées (bascule atomique)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "upload/latest*.yml,upload/manifest.json,upload/SHA256SUMS.txt"
+          target: "/var/www/nartya/dl/fm/"
+          strip_components: 1
+
+      - name: Résumé
+        run: |
+          echo "✅ Publié sur https://nartya.app/dl/fm/"
+          echo "Vérifie : curl -s https://nartya.app/dl/fm/manifest.json"
+
+      # Note de version Discord — dernier geste, une fois la version réellement en ligne.
+      # Ne peut pas faire échouer la publication : l'action avertit et rend la main.
+      - name: Note de version sur Discord
+        uses: ./.github/actions/discord-release
+        with:
+          webhook: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          app: fm
+          version: ${{ steps.manifest.outputs.version }}
+          changelog-file: upload/manifest.json
+          vps-host: ${{ secrets.VPS_HOST }}
+          vps-user: ${{ secrets.VPS_USER }}
+          vps-key: ${{ secrets.VPS_SSH_KEY }}
+          vps-port: ${{ secrets.VPS_PORT }}

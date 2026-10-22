@@ -45,10 +45,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Pas encore de session Nartya côté FM : les secrets Supabase s'ajouteront ici avec
-      # la synchronisation des favoris (même projet que l'app anime, SSO via le hub).
       - name: Build front (Vite)
         run: npm run build
+        env:
+          # Même projet Supabase que l'app anime : lecture du profil du compte Nartya (SSO via le hub).
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
       - name: Build Electron main process (electron-dist/)
         run: npm run build:electron

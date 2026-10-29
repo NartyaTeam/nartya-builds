@@ -38,6 +38,11 @@ const APPS = {
     emoji: "<:fm:1562938719122493451>",
     update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/",
   },
+  games: {
+    name: "Nartya Games",
+    emoji: "🎮",
+    update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/",
+  },
   hub: {
     name: "Nartya Hub",
     emoji: "<:hub:1556704428982272061>",

@@ -88,6 +88,21 @@ jobs:
           console.log(`✅ FM Android ${versionName} (code ${versionCode})`);
           NODE
 
+      # Règle de CLAUDE.md (nartya-fm) : le secours YouTube doit lire des titres jusqu'au bout.
+      # Code 3 = non concluant : YouTube filtre les adresses de datacenter (vérification
+      # anti-robots), le vrai contrôle se fait depuis un PC (cf. /publish fm-android, fm-ios).
+      - name: Moteur de secours YouTube
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-youtube-direct.mjs
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::warning::Test du secours YouTube non concluant depuis GitHub (adresse filtrée) : à lancer depuis un PC."
+            exit 0
+          fi
+          exit "$code"
+
       - name: Reconstruit le keystore éphémère
         shell: bash
         env:
@@ -111,9 +126,7 @@ jobs:
           chmod 600 android/keystore.properties
 
       - name: Tests et build APK release signé
-        run: |
-          npm run test:youtube-direct
-          npm run android:release
+        run: npm run android:release
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}

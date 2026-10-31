@@ -79,9 +79,20 @@ jobs:
           echo "version=$(node -p 'require("./ios/version.json").versionName')" >> "$GITHUB_OUTPUT"
           echo "build=$(node -p 'require("./ios/version.json").buildNumber')" >> "$GITHUB_OUTPUT"
 
-      # Règle de CLAUDE.md (nartya-fm) : pas d'app mobile si le secours YouTube est cassé.
+      # Règle de CLAUDE.md (nartya-fm) : le secours YouTube doit lire des titres jusqu'au bout.
+      # Code 3 = non concluant : YouTube filtre les adresses de datacenter (vérification
+      # anti-robots), le vrai contrôle se fait depuis un PC (cf. /publish fm-android, fm-ios).
       - name: Moteur de secours YouTube
-        run: npm run test:youtube-direct
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-youtube-direct.mjs
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::warning::Test du secours YouTube non concluant depuis GitHub (adresse filtrée) : à lancer depuis un PC."
+            exit 0
+          fi
+          exit "$code"
 
       - name: Build web et synchronisation Capacitor
         run: npm run ios:sync

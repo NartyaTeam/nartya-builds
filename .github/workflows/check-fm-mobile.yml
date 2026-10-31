@@ -1,0 +1,96 @@
+name: Check FM Mobile
+
+# Vérifie qu'une branche de NartyaTeam/nartya-fm compile sur Android (APK de debug) et sur iOS
+# (app non signée), AVANT tout tag de version : rien n'est signé, publié ni gardé. Utile pour
+# l'iOS, qu'aucun PC Windows de l'équipe ne peut compiler. Aucun secret de signature : seul le
+# PAT de lecture du dépôt privé.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branche ou commit de NartyaTeam/nartya-fm à vérifier (ex. feat/mobile)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  youtube-direct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: NartyaTeam/nartya-fm
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Règle de CLAUDE.md (nartya-fm) : le secours YouTube doit lire des titres jusqu'au bout.
+      - run: npm run test:youtube-direct
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: NartyaTeam/nartya-fm
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: APK de debug
+        run: npm run android:debug
+      - run: ls -lh android/app/build/outputs/apk/debug/
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: NartyaTeam/nartya-fm
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.APP_CHECKOUT_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Sélectionne le Xcode le plus récent du runner
+        shell: bash
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n1)
+          [ -n "$XCODE" ] && sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+      - run: npm ci
+      - run: npm run ios:sync
+      - name: Compile l'app iOS (Release, non signée)
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | grep -E "error:|warning: .*Nartya|BUILD (SUCCEEDED|FAILED)" || true
+          test -f build/Build/Products/Release-iphoneos/App.app/public/index.html
+          test -f build/Build/Products/Release-iphoneos/App.app/public/youtube/engine.js

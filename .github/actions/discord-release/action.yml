@@ -14,7 +14,7 @@ inputs:
     description: "URL du webhook Discord (secret DISCORD_RELEASE_WEBHOOK)"
     required: true
   app:
-    description: "anime | movies | fm | games | android | ios | movies-android | movies-ios | hub"
+    description: "anime | movies | fm | games | android | ios | movies-android | movies-ios | fm-android | fm-ios | hub"
     required: true
   version:
     description: "Version publiée (avec ou sans le v)"

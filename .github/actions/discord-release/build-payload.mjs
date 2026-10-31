@@ -68,6 +68,16 @@ const APPS = {
     emoji: "🍏",
     update: "Ouvrez **SideStore** → onglet **Mises à jour** (source : https://nartya.app/dl/movies-ios/source.json).",
   },
+  "fm-android": {
+    name: "Nartya FM Android",
+    emoji: "<:fm:1562938719122493451>",
+    update: "La mise à jour se propose dans l'app (**Réglages**). Sinon : https://nartya.app/",
+  },
+  "fm-ios": {
+    name: "Nartya FM iOS",
+    emoji: "<:fm:1562938719122493451>",
+    update: "Ouvrez **SideStore** → onglet **Mises à jour** (source : https://nartya.app/dl/fm-ios/source.json).",
+  },
 };
 
 /** Un préfixe par type de changement, dans l'ordre de lecture : le neuf d'abord. */

@@ -43,6 +43,11 @@ const APPS = {
     emoji: "🎮",
     update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Sous Linux : https://nartya.app/",
   },
+  tcg: {
+    name: "Nartya TCG (bêta fermée)",
+    emoji: "🃏",
+    update: "Mise à jour depuis **Nartya Hub** → bouton **Mettre à jour**. Bêta fermée : la première installation demande une clé.",
+  },
   hub: {
     name: "Nartya Hub",
     emoji: "<:hub:1556704428982272061>",

@@ -14,7 +14,6 @@ name: Build TCG
 #
 # Le jeu parle au serveur du TCG : ses adresses (variables de dépôt `TCG_SERVEUR_URL` en wss:// et
 # `TCG_SERVEUR_HTTP` en https://) sont gravées dans le build, avec la bêta fermée (`VITE_BETA_FERMEE=1`).
-# Windows seulement pendant la bêta.
 on:
   workflow_dispatch:
     inputs:
@@ -53,7 +52,11 @@ jobs:
 
   build:
     needs: tests
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Vérifie les adresses du serveur du jeu
         shell: bash
@@ -104,7 +107,7 @@ jobs:
           echo "✅ Build propre."
 
       - name: Build Electron (sans publication)
-        run: npx --no-install electron-builder --win --publish never
+        run: npx --no-install electron-builder --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
@@ -117,11 +120,29 @@ jobs:
           fi
           ls -lh release/
 
+      - name: Vérifie que latest-mac.yml couvre les deux architectures
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for f in release/latest-mac*.yml; do echo "── $f ──"; cat "$f"; done
+          agrege=$(cat release/latest-mac*.yml)
+          for a in x64 arm64; do
+            printf '%s' "$agrege" | grep -q -- "-mac-${a}\." || {
+              echo "❌ Aucun artefact ${a} référencé dans les latest-mac*.yml."
+              exit 1
+            }
+          done
+          echo "✅ x64 et arm64 sont tous deux référencés."
+
       - uses: actions/upload-artifact@v4
         with:
-          name: build-windows
+          name: build-${{ matrix.os }}
           path: |
             release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
             release/*.blockmap
             release/latest*.yml
           if-no-files-found: error
@@ -162,12 +183,15 @@ jobs:
           echo "── manifest.json ──"; cat upload/manifest.json
           echo "── SHA256SUMS.txt ──"; cat upload/SHA256SUMS.txt
 
-      - name: Scan de l'installeur sur VirusTotal
+      - name: Scan des installeurs sur VirusTotal
         uses: crazy-max/ghaction-virustotal@v4
         with:
           vt_api_key: ${{ secrets.VT_API_KEY }}
           files: |
             upload/Nartya TCG-*.exe
+            upload/Nartya TCG-*.dmg
+            upload/Nartya TCG-*.AppImage
+            upload/Nartya TCG-*.deb
 
       - uses: actions/upload-artifact@v4
         with:

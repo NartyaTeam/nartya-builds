@@ -55,7 +55,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # Pas de macOS : la bêta sort sur Windows (et Linux), et les machines macOS gratuites de GitHub manquent
+        # souvent (job annulé au bout de 15 min faute de machine, nov. 2026). Le remettre ici le jour d'une version Mac.
+        os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Vérifie les adresses du serveur du jeu
@@ -189,7 +191,6 @@ jobs:
           vt_api_key: ${{ secrets.VT_API_KEY }}
           files: |
             upload/Nartya TCG-*.exe
-            upload/Nartya TCG-*.dmg
             upload/Nartya TCG-*.AppImage
             upload/Nartya TCG-*.deb
 

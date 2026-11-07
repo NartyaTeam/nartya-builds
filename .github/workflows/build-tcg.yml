@@ -55,10 +55,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Pas de macOS : la bêta sort sur Windows (et Linux), et les machines macOS gratuites de GitHub manquent
-        # souvent (job annulé au bout de 15 min faute de machine, nov. 2026). Le remettre ici le jour d'une version Mac.
-        os: [windows-latest, ubuntu-latest]
+        # macOS (dmg + zip, x64 et arm64) depuis la 0.2.3. Les machines macOS gratuites de GitHub manquent parfois
+        # (job annulé faute de machine, nov. 2026) : ce job-là ne bloque jamais la version Windows et Linux (voir
+        # `continue-on-error` et le job verify, qui publie sans Mac plutôt que pas du tout).
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - name: Vérifie les adresses du serveur du jeu
         shell: bash
@@ -151,7 +153,9 @@ jobs:
           retention-days: 1
 
   verify:
-    needs: build
+    needs: [tests, build]
+    # Même si le job macOS est tombé ou a été annulé (faute de machine) : Windows et Linux sont vérifiés plus bas.
+    if: ${{ !cancelled() && needs.tests.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout du code source privé (pour outils/gen-release-manifest.mjs et changelog.js)
@@ -175,6 +179,18 @@ jobs:
           find artifacts -type f -exec cp -n {} upload/ \;
           ls -lh upload
 
+      - name: Windows et Linux sont obligatoires, macOS non
+        shell: bash
+        run: |
+          for motif in "*-win.exe" "*-linux-x86_64.AppImage" "latest.yml" "latest-linux.yml"; do
+            ls upload/$motif >/dev/null 2>&1 || { echo "❌ Il manque upload/$motif : on ne publie pas une version sans Windows ou Linux."; exit 1; }
+          done
+          if ls upload/*-mac-*.dmg >/dev/null 2>&1 && ls upload/latest-mac*.yml >/dev/null 2>&1; then
+            echo "✅ Windows, Linux et macOS."
+          else
+            echo "::warning::Pas de build macOS dans ce run (machine GitHub manquante ?) : relance « Build TCG » pour l'avoir, ou publie sans."
+          fi
+
       - name: Génère manifest.json + SHA256SUMS.txt
         shell: bash
         run: |
@@ -193,6 +209,7 @@ jobs:
             upload/Nartya TCG-*.exe
             upload/Nartya TCG-*.AppImage
             upload/Nartya TCG-*.deb
+            upload/Nartya TCG-*.dmg
 
       - uses: actions/upload-artifact@v4
         with:

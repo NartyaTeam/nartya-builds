@@ -48,20 +48,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build front (Vite)
-        run: npm run build
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_DISCORD_RPC_CLIENT_ID: "1170085087564541953"
-
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      # `tauri build` relance lui-même `npm run build` (beforeBuildCommand) et écrase dist/ :
+      # les variables VITE_* doivent donc être posées ICI, sinon le front embarqué n'a ni
+      # Supabase ni identifiant Discord (écran gris au lancement).
       - name: Installeur Tauri (sans publication)
         run: npm run tauri:bundle
         env:
           NO_STRIP: "true"
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_DISCORD_RPC_CLIENT_ID: "1170085087564541953"
 
       - name: Contenu produit
         shell: bash

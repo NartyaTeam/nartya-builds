@@ -20,7 +20,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - { os: windows-latest, name: windows }
+          - { os: ubuntu-latest, name: linux-x64 }
+          - { os: ubuntu-24.04-arm, name: linux-arm64 }
+          - { os: macos-latest, name: mac-arm64 }
+          - { os: macos-15-intel, name: mac-x64 }
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout du code source (NartyaTeam/nartya, public)
@@ -34,6 +39,12 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Dépendances système (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev patchelf
+
       - name: Install dependencies
         run: npm ci
 
@@ -44,45 +55,26 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_DISCORD_RPC_CLIENT_ID: "1170085087564541953"
 
-      - name: Build Electron (sans publication)
-        run: npx --no-install electron-builder --publish never
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Installeur Tauri (sans publication)
+        run: npm run tauri:bundle
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          NO_STRIP: "true"
 
-      - name: Vérifie la présence des métadonnées updater (latest*.yml)
+      - name: Contenu produit
         shell: bash
-        run: |
-          if ! ls release/latest*.yml >/dev/null 2>&1; then
-            echo "❌ Aucun latest*.yml généré — l'updater standalone serait cassé."
-            exit 1
-          fi
-          ls -lh release/
-
-      - name: Vérifie que latest-mac.yml couvre les deux architectures
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          for f in release/latest-mac*.yml; do echo "── $f ──"; cat "$f"; done
-          agrege=$(cat release/latest-mac*.yml)
-          for a in x64 arm64; do
-            printf '%s' "$agrege" | grep -q -- "-mac-${a}\." || {
-              echo "❌ Aucun artefact ${a} référencé dans les latest-mac*.yml."
-              exit 1
-            }
-          done
-          echo "✅ x64 et arm64 sont tous deux référencés."
+        run: ls -lh release/tauri/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.os }}
+          name: build-${{ matrix.name }}
           path: |
-            release/*.exe
-            release/*.dmg
-            release/*.zip
-            release/*.AppImage
-            release/*.deb
-            release/*.blockmap
-            release/latest*.yml
+            release/tauri/*.exe
+            release/tauri/*.dmg
+            release/tauri/*.AppImage
+            release/tauri/*.deb
           if-no-files-found: error
           retention-days: 1
 

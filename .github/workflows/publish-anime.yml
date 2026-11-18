@@ -48,7 +48,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          source: "upload/Nartya-*.exe,upload/Nartya-*.dmg,upload/Nartya-*.zip,upload/Nartya-*.AppImage,upload/Nartya-*.deb,upload/*.blockmap"
+          source: "upload/Nartya-*.exe,upload/Nartya-*.dmg,upload/Nartya-*.AppImage,upload/Nartya-*.deb"
           target: "/var/www/nartya/dl/anime/"
           strip_components: 1
 
@@ -59,7 +59,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          source: "upload/latest*.yml,upload/manifest.json,upload/SHA256SUMS.txt"
+          source: "upload/manifest.json,upload/SHA256SUMS.txt"
           target: "/var/www/nartya/dl/anime/"
           strip_components: 1
 

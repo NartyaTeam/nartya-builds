@@ -73,6 +73,7 @@ jobs:
           path: |
             release/tauri/*.exe
             release/tauri/*.dmg
+            release/tauri/*.zip
             release/tauri/*.AppImage
             release/tauri/*.deb
           if-no-files-found: error
@@ -118,6 +119,7 @@ jobs:
           files: |
             upload/Nartya-*.exe
             upload/Nartya-*.dmg
+            upload/Nartya-*.zip
             upload/Nartya-*.AppImage
             upload/Nartya-*.deb
 

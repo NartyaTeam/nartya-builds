@@ -48,7 +48,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          source: "upload/Nartya-*.exe,upload/Nartya-*.dmg,upload/Nartya-*.AppImage,upload/Nartya-*.deb"
+          source: "upload/Nartya-*.exe,upload/Nartya-*.dmg,upload/Nartya-*.zip,upload/Nartya-*.AppImage,upload/Nartya-*.deb"
           target: "/var/www/nartya/dl/anime/"
           strip_components: 1
 
